@@ -9,14 +9,13 @@ class RandomAgent:
     def __init__(self, player: int):
         pass  # No initialization needed for a RandomAgent
 
-    def select_move(self, s: State) -> Tuple[int, str]:
+    def select_move(self, s: State) -> int:
         possible_moves = s.possible_moves()
-        return (
-            random.choice(possible_moves) if possible_moves else -1,
-            "random",
-        )  # Returns -1 if no moves are available
+        if not possible_moves:
+            return -1
+        return random.choice(possible_moves)
 
-    def update_reward(self, s: State, r: State, reward: float, move_type: str):
+    def update_reward(self, new_state: State, reward: float):
         pass  # No reward handling for a random agent
 
 

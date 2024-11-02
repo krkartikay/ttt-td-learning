@@ -2,6 +2,7 @@ import numpy as np
 from typing import List
 
 value_to_symbol = {-1: "O", 0: "None", 1: "X"}
+symbol_map = {0: ".", 1: "X", -1: "O"}
 
 
 class State:
@@ -14,7 +15,6 @@ class State:
             self.current_turn = r.current_turn
 
     def print(self):
-        symbol_map = {0: ".", 1: "X", -1: "O"}
         for row in self.board:
             print(" ".join(symbol_map[cell] for cell in row))
         print()
@@ -23,15 +23,20 @@ class State:
         return self.current_turn
 
     def fill(self, x: int):
+        new_state = State(self)
         row, col = divmod(x, 3)
-        if self.board[row, col] == 0:
-            self.board[row, col] = self.current_turn
-            self.current_turn = -self.current_turn  # Switch turns
+        if new_state.board[row, col] == 0:
+            new_state.board[row, col] = new_state.current_turn
+            new_state.current_turn = -new_state.current_turn  # Switch turns
+            return new_state
         else:
             raise ValueError("Cell is already filled")
 
     def __hash__(self) -> int:
         return hash(tuple(self.board.flatten()))
+
+    def __str__(self) -> str:
+        return "".join(symbol_map[cell] for cell in self.board.flatten())
 
     def __eq__(self, r: "State") -> bool:
         return np.array_equal(self.board, r.board)

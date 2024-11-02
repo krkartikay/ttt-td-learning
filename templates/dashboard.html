@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <style>
+        /* Basic layout styling */
+        body {
+            display: flex;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #sidebar {
+            width: 200px;
+            padding: 10px;
+            background-color: #f4f4f4;
+            border-right: 1px solid #ddd;
+        }
+
+        #content {
+            flex: 1;
+            padding: 10px;
+        }
+
+        .graph-container {
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .graph-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .slice-filter {
+            margin-left: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="sidebar">
+        <h3>Metrics</h3>
+        <div id="metrics-list">
+            <div>
+                <input type="checkbox" id="select-all" checked>
+                <label for="select-all">Select All</label>
+            </div>
+        </div>
+    </div>
+
+    <div id="content">
+        <div id="metrics-info"></div>
+        <div>
+            <label for="smoothing">Smoothing:</label>
+            <input type="range" id="smoothing" name="smoothing" min="0" max="0.99" step="0.01" value="0">
+            <span id="smoothing-value">0</span>
+            <button onclick="updateGraph()">Update Graphs</button>
+        </div>
+        <div id="graphs"></div>
+    </div>
+
+    <script>
+        function smoothData(values, smoothing) {
+            let alpha = 1 - smoothing;
+
+            // If alpha is 0, return the original data without smoothing
+            if (alpha < 0) return values;
+
+            let smoothedValues = [];
+            smoothedValues[0] = values[0];  // Initialize the first value
+
+            for (let i = 1; i < values.length; i++) {
+                smoothedValues[i] = alpha * values[i] + (1 - alpha) * smoothedValues[i - 1];
+            }
+
+            return smoothedValues;
+        }
+
+        function debounce(func, delay) {
+            let timeout;
+            return function (...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+
+        function loadMetrics() {
+            $.getJSON("/metrics", function (data) {
+                let metricCount = Object.keys(data).length;
+                $("#metrics-info").text(`${metricCount} metrics loaded`);
+
+                let metricsList = $("#metrics-list");
+                metricsList.empty();
+
+                // Add "Select All" checkbox
+                metricsList.append(`
+                    <div>
+                        <input type="checkbox" id="select-all" checked>
+                        <label for="select-all">Select All</label>
+                    </div>
+                `);
+
+                // Add a checkbox for each metric
+                for (const metric of Object.keys(data)) {
+                    metricsList.append(`
+                        <div>
+                            <input type="checkbox" class="metric-checkbox" id="${metric}" name="${metric}" checked>
+                            <label for="${metric}">${metric}</label>
+                        </div>
+                    `);
+                }
+
+                // Set up event listeners
+                $("#select-all").on("change", function () {
+                    $(".metric-checkbox").prop("checked", this.checked);
+                    updateGraph();
+                });
+
+                $(".metric-checkbox").on("change", function () {
+                    if ($(".metric-checkbox:checked").length === $(".metric-checkbox").length) {
+                        $("#select-all").prop("checked", true);
+                    } else {
+                        $("#select-all").prop("checked", false);
+                    }
+                    updateGraph();
+                });
+
+                updateGraph();  // Initial graph update
+            });
+        }
+
+        const debouncedUpdateGraph = debounce(updateGraph, 500);
+
+        function updateGraph() {
+            // Save current filter values
+            const filterValues = {};
+            $(".slice-filter").each(function () {
+                const metric = $(this).attr("id").replace("-filter", "");
+                filterValues[metric] = $(this).val();
+            });
+
+            $.getJSON("/metrics", function (data) {
+                let alpha = parseFloat($("#smoothing").val());
+                $("#smoothing-value").text(alpha);
+
+                let graphsContainer = $("#graphs");
+                graphsContainer.empty();  // Clear previous graphs
+
+                // Get selected metrics
+                let selectedMetrics = $(".metric-checkbox:checked").map(function () {
+                    return this.id;
+                }).get();
+
+                for (const [metric, values] of Object.entries(data)) {
+                    if (selectedMetrics.includes(metric)) {
+                        let metricDivId = `graph-${metric}`;
+                        let hasSlices = values[0].length === 3;
+
+                        // Identify unique slices
+                        const uniqueSlices = hasSlices ? [...new Set(values.map(point => point[2]))] : [];
+                        const plotMultipleSlices = uniqueSlices.length > 1 && uniqueSlices.length <= 10;
+
+                        graphsContainer.append(`
+                            <div class="graph-container">
+                                <div class="graph-header">
+                                    <h3>${metric}</h3>
+                                    ${!plotMultipleSlices && hasSlices ? `<input type="text" id="${metric}-filter" class="slice-filter" placeholder="Filter by slice" value="${filterValues[metric] || ''}">` : ''}
+                                    <span id="${metric}-slice-count">${hasSlices ? `${uniqueSlices.length} slices in metric` : `${values.length} entries`}</span>
+                                </div>
+                                <div id="${metricDivId}"></div>
+                            </div>
+                        `);
+
+                        let traces = [];
+
+                        if (plotMultipleSlices) {
+                            // Plot each unique slice as a separate series if N <= 10
+                            uniqueSlices.forEach(slice => {
+                                const sliceData = values.filter(point => point[2] === slice);
+                                const timestamps = sliceData.map(point => point[0]);
+                                const metrics_values = smoothData(sliceData.map(point => point[1]), alpha);
+
+                                traces.push({
+                                    x: timestamps,
+                                    y: metrics_values,
+                                    mode: 'lines',
+                                    name: `Slice: ${slice}`
+                                });
+                            });
+                        } else {
+                            // Filter data based on the input filter if too many slices or no slices
+                            let sliceFilter = hasSlices ? filterValues[metric] : null;
+                            let filteredValues = hasSlices && sliceFilter
+                                ? values.filter(point => point[2] === sliceFilter)
+                                : values;
+
+                            let timestamps = filteredValues.map(point => point[0]);
+                            let metrics_values = smoothData(filteredValues.map(point => point[1]), alpha);
+
+                            traces.push({
+                                x: timestamps,
+                                y: metrics_values,
+                                mode: 'lines',
+                                name: metric
+                            });
+                        }
+
+                        let layout = {
+                            height: 200,
+                            xaxis: { title: 'Logical Time' },
+                            margin: { l: 40, r: 30, t: 0, b: 30 }
+                        };
+
+                        Plotly.newPlot(metricDivId, traces, layout);
+
+                        // Apply debounced input event listener to filter input for each metric
+                        if (!plotMultipleSlices && hasSlices) {
+                            $(`#${metric}-filter`).on("input", debouncedUpdateGraph);
+                        }
+                    }
+                }
+            });
+        }
+
+        $("#smoothing").on("input", updateGraph);
+        loadMetrics();  // Initial load to populate metric checkboxes and graphs
+    </script>
+</body>
+
+</html>
